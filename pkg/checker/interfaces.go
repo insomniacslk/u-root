@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"os/exec"
 	"time"
 
 	"github.com/insomniacslk/dhcp/netboot"
@@ -139,15 +141,48 @@ func InterfaceRemediate(ifname string) Remediator {
 	}
 }
 
-// InterfaceCanDoDHCPv6 checks whether DHCPv6 succeeds on an interface, and if
-// it has a valid netboot URL.
-func InterfaceCanDoDHCPv6(ifname string) Checker {
+// InterfaceCanDoNetbootv6 checks whether DHCPv6 succeeds on an interface, if
+// it has a valid netboot URL, and if it can download the NBP.
+func InterfaceCanDoNetbootv6(ifname string) Checker {
 	return func() error {
-		conv, err := netboot.RequestNetbootv6(ifname, 10*time.Second, 2)
+		conv, err := netboot.RequestNetbootv6(ifname, 10*time.Second, 1)
 		if err != nil {
 			return err
 		}
-		_, _, err = netboot.ConversationToNetconf(conv)
+		_, bootfile, err := netboot.ConversationToNetconf(conv)
+		if err != nil {
+			return err
+		}
+		// try to fetch the boot file, assuming it's http
+		req, err := http.Get(bootfile)
+		defer req.Body.Close()
 		return err
+	}
+}
+
+// InterfaceCanDoNetbootv4 checks whether DHCPv4 succeeds on an interface, if
+// it has a valid netboot URL, and if it can download the NBP.
+func InterfaceCanDoNetbootv4(ifname string) Checker {
+	return func() error {
+		conv, err := netboot.RequestNetbootv4(ifname, 10*time.Second, 1)
+		if err != nil {
+			return err
+		}
+		_, bootfile, err := netboot.ConversationToNetconf(conv)
+		if err != nil {
+			return err
+		}
+		// try to fetch the boot file, assuming it's http
+		req, err := http.Get(bootfile)
+		defer req.Body.Close()
+		return err
+	}
+}
+
+// RunNTPDate runs ntpdate using /etc/ntp.conf .
+func RunNTPDate() Remediator {
+	return func() error {
+		cmd := exec.Command("ntpdate", "-verbose")
+		return cmd.Run()
 	}
 }

@@ -57,8 +57,14 @@ func checkInterface(ifname string) error {
 		},
 		{
 			Name:        fmt.Sprintf("%s has global addresses", ifname),
-			Run:         checker.InterfaceHasGlobalAddresses("eth0"),
+			Run:         checker.InterfaceHasGlobalAddresses(ifname),
 			Remediate:   nil,
+			StopOnError: true,
+		},
+		{
+			Name:        fmt.Sprintf("%s can do netboot", ifname),
+			Run:         checker.InterfaceCanDoDHCPv6(ifname),
+			Remediate:   checker.RunNTPDate(),
 			StopOnError: true,
 		},
 	}
