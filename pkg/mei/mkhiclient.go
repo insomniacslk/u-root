@@ -99,6 +99,7 @@ const (
 const (
 	MKHIHmrfpoEnable    = 0x1
 	MKHIHmrfpoGetStatus = 0x3
+	MKHIGetEOPState     = 0x1d
 )
 
 // pciAddressToInt converts the last part of a PCI address string to integer,
@@ -176,6 +177,11 @@ type hmrfpoEnableMsg struct {
 	nonce  uint32
 }
 
+type getEOPStateMsg struct {
+	header MKHIHdr
+	nonce  uint32
+}
+
 func (hem hmrfpoEnableMsg) ToBytes() []byte {
 	var buf []byte
 	buf = append(buf, hem.header[:]...)
@@ -184,10 +190,24 @@ func (hem hmrfpoEnableMsg) ToBytes() []byte {
 	return append(buf, nonce[:]...)
 }
 
+func (gesm getEOPStateMsg) ToBytes() []byte {
+	var buf []byte
+	buf = append(buf, gesm.header[:]...)
+	var nonce [4]byte
+	binary.LittleEndian.PutUint32(nonce[:], gesm.nonce)
+	return append(buf, nonce[:]...)
+}
+
 type hmrfpoEnableResponse struct {
 	Header   MKHIHdr
 	FctBase  uint32
 	FctLimit uint32
+	Status   uint8
+	reserved [3]byte
+}
+
+type getEOPStateResponse struct {
+	Header   MKHIHdr
 	Status   uint8
 	reserved [3]byte
 }
@@ -212,6 +232,25 @@ func hmrfpoEnableResponseFromBytes(b []byte) (*hmrfpoEnableResponse, error) {
 	resp.FctBase = binary.LittleEndian.Uint32(b[4:8])
 	resp.FctLimit = binary.LittleEndian.Uint32(b[8:12])
 	resp.Status = b[12]
+	return &resp, nil
+}
+
+func getEOPStateResponseFromBytes(b []byte) (*getEOPStateResponse, error) {
+	var resp getEOPStateResponse
+	minlen := len(resp.Header)
+	maxlen := minlen +
+		1 /* Status */ +
+		3 /* reserved bytes */
+	if len(b) != minlen && len(b) != maxlen {
+		return nil, fmt.Errorf("size mismatch, want %d/%d bytes, got %d", minlen, maxlen, len(b))
+	}
+	copy(resp.Header[:], b[:4])
+	if len(b) == minlen {
+		// don't parse the rest, we got a partial response
+		return &resp, nil
+	}
+	// TODO this could use u-root's pkg/uio
+	resp.Status = b[4]
 	return &resp, nil
 }
 
@@ -287,4 +326,39 @@ func GetMeiPciDevice() (*ghw.PCIDevice, error) {
 		}
 	}
 	return nil, errors.New("no MEI device found")
+}
+
+func (m MKHIClient) GetEOPState() error {
+	var hdr MKHIHdr
+	hdr.SetGroupID(MKHIGroupIDGen)
+	hdr.SetCommand(MKHIGetEOPState)
+	msg := getEOPStateMsg{
+		header: hdr,
+		nonce:  0,
+	}
+	if _, err := m.MEI.Write(msg.ToBytes()); err != nil {
+		return fmt.Errorf("write to MEI failed: %w", err)
+	}
+	// TODO get the size value from the client properties returned by MEI.OpenMKHI
+	buf := make([]byte, 2048)
+	n, err := m.MEI.Read(buf)
+	if err != nil {
+		return fmt.Errorf("read from MEI failed: %w", err)
+	}
+	resp, err := getEOPStateResponseFromBytes(buf[:n])
+	if err != nil {
+		return fmt.Errorf("failed to parse GetEOPStateResponse: %w", err)
+	}
+	// TODO remove these debug prints
+	log.Printf("GroupID   : %d", resp.Header.GroupID())
+	log.Printf("Command   : %d", resp.Header.Command())
+	log.Printf("IsResponse: %v", resp.Header.IsResponse())
+	log.Printf("RSVD      : %d", resp.Header.RSVD())
+	log.Printf("Result    : %d", resp.Header.Result())
+	if resp.Header.Result() != 0 {
+		return fmt.Errorf("failed to get EOP status, request result is 0x%02x, want 0x0", resp.Header.Result())
+	}
+	log.Printf("EOP Status: %d\n", resp.Status)
+
+	return nil
 }
