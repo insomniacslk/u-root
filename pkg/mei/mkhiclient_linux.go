@@ -356,41 +356,39 @@ func hmrfpoLockResponseFromBytes(b []byte) (*hmrfpoLockResponse, error) {
 // EnableHMRFPO enables the HMRFPO (Host ME Region Flash Protection Override) via CSE,
 // see cse_hmrfpo_enable at
 // https://github.com/coreboot/coreboot/blob/b8b8ec832360ada5a313f10938bb6cfc310a11eb/src/soc/intel/common/block/include/intelblocks/cse.h#L64
-func (m *MKHIClient) EnableHMRFPO() error {
+func (m *MKHIClient) EnableHMRFPO() (uint8, error) {
 
 	var hdr mkhiHdr
 	hdr.SetGroupID(mkhiGroupIDHMRFPO)
 	hdr.SetCommand(mkhiHMRFPOEnable)
 	canEnable, err := m.IsHMRFPOEnableAllowed()
 	if err != nil {
-		return fmt.Errorf("enabling HMRFPO failed: %v", err)
+		return 0, fmt.Errorf("enabling HMRFPO failed: %v", err)
 	}
 	if !canEnable {
-		return fmt.Errorf("enabling HMRFPO is not allowed")
+		return 0, fmt.Errorf("enabling HMRFPO is not allowed")
 	}
 	msg := hmrfpoEnableMsg{
 		header: hdr,
 		nonce:  0,
 	}
 	if _, err := m.MEI.Write(msg.ToBytes()); err != nil {
-		return fmt.Errorf("write to MEI failed: %v", err)
+		return 0, fmt.Errorf("write to MEI failed: %v", err)
 	}
 	buf := make([]byte, m.MEI.ClientProperties.MaxMsgLength())
 	n, err := m.MEI.Read(buf)
 	if err != nil {
-		return fmt.Errorf("read from MEI failed: %v", err)
+		return 0, fmt.Errorf("read from MEI failed: %v", err)
 	}
 	resp, err := hmrfpoEnableResponseFromBytes(buf[:n])
 	if err != nil {
-		return fmt.Errorf("failed to parse HMRFPOEnableResponse: %v", err)
+		return 0, fmt.Errorf("failed to parse HMRFPOEnableResponse: %v", err)
 	}
 	if resp.Header.Result() != 0 {
-		return fmt.Errorf("failed to enable HMRFPO, request result is 0x%02x, want 0x0", resp.Header.Result())
+		return 0, fmt.Errorf("failed to enable HMRFPO, request result is 0x%02x, want 0x0", resp.Header.Result())
 	}
-	if resp.State != 0 {
-		return fmt.Errorf("failed to enable HMRFPO, request State is 0x%02x, want 0x0", resp.State)
-	}
-	return nil
+
+	return resp.State, nil
 }
 
 // GetMeiPciDevice will return the MEI PCI device object after scanning the PCI
