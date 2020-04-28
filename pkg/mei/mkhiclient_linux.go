@@ -113,10 +113,9 @@ const (
 // MKHI HMRFPO command IDs, see
 // https://github.com/coreboot/coreboot/blob/b8b8ec832360ada5a313f10938bb6cfc310a11eb/src/soc/intel/common/block/include/intelblocks/cse.h#L33
 const (
-	mkhiHMRFPOEnable    = 0x1
-	mkhiHMRFPOGetStatus = 0x3
-	mkhiGetEOPState     = 0x1d
-	mkhiGetHMRFPOLock   = 0x3
+	mkhiHMRFPOEnable   = 0x1
+	mkhiHMRFPOGetState = 0x3
+	mkhiEOPGetState    = 0x1d
 )
 
 // pciAddressToInt converts the last part of a PCI address string to integer,
@@ -203,7 +202,7 @@ type getEOPStateMsg struct {
 	nonce  uint32
 }
 
-type getHMRFPOLockMsg struct {
+type getHMRFPOStateMsg struct {
 	header mkhiHdr
 	nonce  uint32
 }
@@ -224,7 +223,7 @@ func (gesm getEOPStateMsg) ToBytes() []byte {
 	return append(buf, nonce[:]...)
 }
 
-func (gesm getHMRFPOLockMsg) ToBytes() []byte {
+func (gesm getHMRFPOStateMsg) ToBytes() []byte {
 	var buf []byte
 	buf = append(buf, gesm.header[:]...)
 	var nonce [4]byte
@@ -236,19 +235,19 @@ type hmrfpoEnableResponse struct {
 	Header   mkhiHdr
 	FctBase  uint32
 	FctLimit uint32
-	Status   uint8
+	State    uint8
 	reserved [3]byte
 }
 
 type getEOPStateResponse struct {
 	Header   mkhiHdr
-	Status   uint8
+	State    uint8
 	reserved [3]byte
 }
 
-type getHMRFPOLockResponse struct {
+type getHMRFPOStateResponse struct {
 	Header   mkhiHdr
-	Status   uint8
+	State    uint8
 	reserved [3]byte
 }
 
@@ -258,7 +257,7 @@ func hmrfpoEnableResponseFromBytes(b []byte) (*hmrfpoEnableResponse, error) {
 	maxlen := minlen +
 		4 /* FctBase */ +
 		4 /* FctLimit */ +
-		1 /* Status */ +
+		1 /* State */ +
 		3 /* reserved bytes */
 	if len(b) != minlen && len(b) != maxlen {
 		return nil, fmt.Errorf("size mismatch, want %d/%d bytes, got %d", minlen, maxlen, len(b))
@@ -271,7 +270,7 @@ func hmrfpoEnableResponseFromBytes(b []byte) (*hmrfpoEnableResponse, error) {
 	// TODO this could use u-root's pkg/uio
 	resp.FctBase = binary.LittleEndian.Uint32(b[4:8])
 	resp.FctLimit = binary.LittleEndian.Uint32(b[8:12])
-	resp.Status = b[12]
+	resp.State = b[12]
 	return &resp, nil
 }
 
@@ -279,7 +278,7 @@ func getEOPStateResponseFromBytes(b []byte) (*getEOPStateResponse, error) {
 	var resp getEOPStateResponse
 	minlen := len(resp.Header)
 	maxlen := minlen +
-		1 /* Status */ +
+		1 /* State */ +
 		3 /* reserved bytes */
 	if len(b) != minlen && len(b) != maxlen {
 		return nil, fmt.Errorf("size mismatch, want %d/%d bytes, got %d", minlen, maxlen, len(b))
@@ -290,15 +289,15 @@ func getEOPStateResponseFromBytes(b []byte) (*getEOPStateResponse, error) {
 		return &resp, nil
 	}
 	// TODO this could use u-root's pkg/uio
-	resp.Status = b[4]
+	resp.State = b[4]
 	return &resp, nil
 }
 
-func getHMRFPOLockResponseFromBytes(b []byte) (*getHMRFPOLockResponse, error) {
-	var resp getHMRFPOLockResponse
+func getHMRFPOStateResponseFromBytes(b []byte) (*getHMRFPOStateResponse, error) {
+	var resp getHMRFPOStateResponse
 	minlen := len(resp.Header)
 	maxlen := minlen +
-		1 /* Status */ +
+		1 /* State */ +
 		3 /* reserved bytes */
 	if len(b) != minlen && len(b) != maxlen {
 		return nil, fmt.Errorf("size mismatch, want %d/%d bytes, got %d", minlen, maxlen, len(b))
@@ -309,7 +308,7 @@ func getHMRFPOLockResponseFromBytes(b []byte) (*getHMRFPOLockResponse, error) {
 		return &resp, nil
 	}
 	// TODO this could use u-root's pkg/uio
-	resp.Status = b[4]
+	resp.State = b[4]
 	return &resp, nil
 }
 
@@ -347,8 +346,8 @@ func (m *MKHIClient) EnableHMRFPO() error {
 	if resp.Header.Result() != 0 {
 		return fmt.Errorf("failed to enable HMRFPO, request result is 0x%02x, want 0x0", resp.Header.Result())
 	}
-	if resp.Status != 0 {
-		return fmt.Errorf("failed to enable HMRFPO, request status is 0x%02x, want 0x0", resp.Status)
+	if resp.State != 0 {
+		return fmt.Errorf("failed to enable HMRFPO, request State is 0x%02x, want 0x0", resp.State)
 	}
 	return nil
 }
@@ -385,72 +384,58 @@ func GetMeiPciDevice() (*pci.PCI, error) {
 	return nil, errors.New("no MEI device found")
 }
 
-func (m MKHIClient) GetEOPState() error {
+func (m MKHIClient) GetEOPState() (uint8, error) {
 	var hdr mkhiHdr
 	hdr.SetGroupID(mkhiGroupIDGen)
-	hdr.SetCommand(mkhiGetEOPState)
+	hdr.SetCommand(mkhiEOPGetState)
 	msg := getEOPStateMsg{
 		header: hdr,
 		nonce:  0,
 	}
 	if _, err := m.MEI.Write(msg.ToBytes()); err != nil {
-		return fmt.Errorf("write to MEI failed: %w", err)
+		return 0, fmt.Errorf("write to MEI failed: %w", err)
 	}
 	// TODO get the size value from the client properties returned by MEI.OpenMKHI
 	buf := make([]byte, 2048)
 	n, err := m.MEI.Read(buf)
 	if err != nil {
-		return fmt.Errorf("read from MEI failed: %w", err)
+		return 0, fmt.Errorf("read from MEI failed: %w", err)
 	}
 	resp, err := getEOPStateResponseFromBytes(buf[:n])
 	if err != nil {
-		return fmt.Errorf("failed to parse GetEOPStateResponse: %w", err)
+		return 0, fmt.Errorf("failed to parse GetEOPStateResponse: %w", err)
 	}
 	if resp.Header.Result() != 0 {
-		return fmt.Errorf("failed to get EOP status, request result is 0x%02x, want 0x0", resp.Header.Result())
+		return 0, fmt.Errorf("failed to get EOP State, request result is 0x%02x, want 0x0", resp.Header.Result())
 	}
-	log.Printf("EOP Status: %d\n", resp.Status)
 
-	return nil
+	return resp.State, nil
 }
 
-func (m MKHIClient) GetHMRFPOLock() error {
+func (m MKHIClient) GetHMRFPOState() (uint8, error) {
 	var hdr mkhiHdr
 	hdr.SetGroupID(mkhiGroupIDHMRFPO)
-	hdr.SetCommand(mkhiGetHMRFPOLock)
-	msg := getHMRFPOLockMsg{
+	hdr.SetCommand(mkhiHMRFPOGetState)
+	msg := getHMRFPOStateMsg{
 		header: hdr,
 		nonce:  0,
 	}
 	if _, err := m.MEI.Write(msg.ToBytes()); err != nil {
-		return fmt.Errorf("write to MEI failed: %w", err)
+		return 0, fmt.Errorf("write to MEI failed: %w", err)
 	}
 	// TODO get the size value from the client properties returned by MEI.OpenMKHI
 	buf := make([]byte, 2048)
 	n, err := m.MEI.Read(buf)
 	if err != nil {
-		return fmt.Errorf("read from MEI failed: %w", err)
+		return 0, fmt.Errorf("read from MEI failed: %w", err)
 	}
-	resp, err := getHMRFPOLockResponseFromBytes(buf[:n])
+	resp, err := getHMRFPOStateResponseFromBytes(buf[:n])
 	if err != nil {
-		return fmt.Errorf("failed to parse GetEOPStateResponse: %w", err)
+		return 0, fmt.Errorf("failed to parse GetHMRFPOSateResponse: %w", err)
 	}
 	if resp.Header.Result() != 0 {
-		return fmt.Errorf("failed to get EOP status, request result is 0x%02x, want 0x0", resp.Header.Result())
-	}
-	switch resp.Status {
-	case 0:
-		log.Println("HMRFPO Status: Disabled")
-		break
-	case 1:
-		log.Println("HMRFPO Status: Locked")
-		break
-	case 2:
-		log.Println("HMRFPO Status: Enabled")
-		break
-	default:
-		log.Println("HMRFPO Status: Unknown")
+		return 0, fmt.Errorf("failed to get HMRFPO State, request result is 0x%02x, want 0x0", resp.Header.Result())
 	}
 
-	return nil
+	return resp.State, nil
 }
