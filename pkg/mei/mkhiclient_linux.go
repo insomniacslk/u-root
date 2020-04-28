@@ -114,6 +114,7 @@ const (
 // https://github.com/coreboot/coreboot/blob/b8b8ec832360ada5a313f10938bb6cfc310a11eb/src/soc/intel/common/block/include/intelblocks/cse.h#L33
 const (
 	mkhiHMRFPOEnable   = 0x1
+	mkhiHMRFPOLock     = 0x2
 	mkhiHMRFPOGetState = 0x3
 	mkhiEOPGetState    = 0x1d
 )
@@ -207,6 +208,11 @@ type getHMRFPOStateMsg struct {
 	nonce  uint32
 }
 
+type hmrfpoLockMsg struct {
+	header mkhiHdr
+	nonce  uint32
+}
+
 func (hem hmrfpoEnableMsg) ToBytes() []byte {
 	var buf []byte
 	buf = append(buf, hem.header[:]...)
@@ -231,6 +237,14 @@ func (gesm getHMRFPOStateMsg) ToBytes() []byte {
 	return append(buf, nonce[:]...)
 }
 
+func (hem hmrfpoLockMsg) ToBytes() []byte {
+	var buf []byte
+	buf = append(buf, hem.header[:]...)
+	var nonce [4]byte
+	binary.LittleEndian.PutUint32(nonce[:], hem.nonce)
+	return append(buf, nonce[:]...)
+}
+
 type hmrfpoEnableResponse struct {
 	Header   mkhiHdr
 	FctBase  uint32
@@ -249,6 +263,13 @@ type getHMRFPOStateResponse struct {
 	Header   mkhiHdr
 	State    uint8
 	reserved [3]byte
+}
+
+type hmrfpoLockResponse struct {
+	Header    mkhiHdr
+	reserved  [16]byte
+	State     uint8
+	reserved2 [3]byte
 }
 
 func hmrfpoEnableResponseFromBytes(b []byte) (*hmrfpoEnableResponse, error) {
@@ -309,6 +330,26 @@ func getHMRFPOStateResponseFromBytes(b []byte) (*getHMRFPOStateResponse, error) 
 	}
 	// TODO this could use u-root's pkg/uio
 	resp.State = b[4]
+	return &resp, nil
+}
+
+func hmrfpoLockResponseFromBytes(b []byte) (*hmrfpoLockResponse, error) {
+	var resp hmrfpoLockResponse
+	minlen := len(resp.Header)
+	maxlen := minlen +
+		16 /* reserved bytes */ +
+		1 /* State */ +
+		3 /* reserved bytes */
+	if len(b) != minlen && len(b) != maxlen {
+		return nil, fmt.Errorf("size mismatch, want %d/%d bytes, got %d", minlen, maxlen, len(b))
+	}
+	copy(resp.Header[:], b[:4])
+	if len(b) == minlen {
+		// don't parse the rest, we got a partial response
+		return &resp, nil
+	}
+	// TODO this could use u-root's pkg/uio
+	resp.State = b[19]
 	return &resp, nil
 }
 
@@ -430,6 +471,34 @@ func (m MKHIClient) GetHMRFPOState() (uint8, error) {
 		return 0, fmt.Errorf("read from MEI failed: %w", err)
 	}
 	resp, err := getHMRFPOStateResponseFromBytes(buf[:n])
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse GetHMRFPOSateResponse: %w", err)
+	}
+	if resp.Header.Result() != 5 {
+		return 0, fmt.Errorf("failed to get HMRFPO State, request result is 0x%02x, want 0x0", resp.Header.Result())
+	}
+
+	return resp.State, nil
+}
+
+func (m MKHIClient) LockHMRFPO() (uint8, error) {
+	var hdr mkhiHdr
+	hdr.SetGroupID(mkhiGroupIDHMRFPO)
+	hdr.SetCommand(mkhiHMRFPOLock)
+	msg := hmrfpoLockMsg{
+		header: hdr,
+		nonce:  0,
+	}
+	if _, err := m.MEI.Write(msg.ToBytes()); err != nil {
+		return 0, fmt.Errorf("write to MEI failed: %w", err)
+	}
+	// TODO get the size value from the client properties returned by MEI.OpenMKHI
+	buf := make([]byte, 2048)
+	n, err := m.MEI.Read(buf)
+	if err != nil {
+		return 0, fmt.Errorf("read from MEI failed: %w", err)
+	}
+	resp, err := hmrfpoLockResponseFromBytes(buf[:n])
 	if err != nil {
 		return 0, fmt.Errorf("failed to parse GetHMRFPOSateResponse: %w", err)
 	}
