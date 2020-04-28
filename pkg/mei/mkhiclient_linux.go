@@ -356,7 +356,7 @@ func (m *MKHIClient) EnableHMRFPO() error {
 // GetMeiPciDevice will return the MEI PCI device object after scanning the PCI
 // bus.
 func GetMeiPciDevice() (*pci.PCI, error) {
-	br, err := pci.NewBusReader()
+	br, err := pci.NewBusReader("*")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create PCI bus reader: %v", err)
 	}
