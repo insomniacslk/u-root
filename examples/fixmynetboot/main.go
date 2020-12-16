@@ -96,6 +96,7 @@ func main() {
 		interfaces = []string{ifname}
 	}
 
+	interfaces = []string{"eth0"}
 	for _, ifname := range interfaces {
 		if err := checkInterface(ifname); err != nil {
 			if !*doEmergencyShell {

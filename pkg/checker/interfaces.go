@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"os/exec"
 	"time"
 
 	"github.com/insomniacslk/dhcp/netboot"
@@ -92,7 +94,12 @@ func InterfaceHasLinkLocalAddress(ifname string) Checker {
 				return nil
 			}
 		}
-		return fmt.Errorf("no link local addresses for interface %s", ifname)
+		cmd := exec.Command("ip", "link", "set", "dev", ifname, "up")
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("no link local addresses for interface %s", ifname)
+		}
+		return nil
 	}
 }
 
@@ -127,8 +134,10 @@ func InterfaceRemediate(ifname string) Remediator {
 			return fmt.Errorf("no trace of %s in dmesg", ifname)
 		}
 		// TODO should this be returned as a string to the caller?
-		fmt.Printf("  found %d references to %s in dmesg\n", len(lines), ifname)
-		return nil
+		fmt.Printf("  found %d references to %s in dmesg, trying to bring the interface up\n", len(lines), ifname)
+		cmd := exec.Command("ip", "link", "set", "dev", ifname, "up")
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		return cmd.Run()
 	}
 }
 
